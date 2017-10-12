@@ -16,3 +16,7 @@ third_party/
 *~
 bazel-*
 third_party/
+
+venv/*
+doc/cn
+doc/en
