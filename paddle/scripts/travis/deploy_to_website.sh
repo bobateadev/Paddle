@@ -9,9 +9,13 @@ chmod 400 ubuntu.pem
 
 ssh-add ubuntu.pem
 
+if [ "$TRAVIS_BRANCH" != "build_docs_ci_thuan" ]; then
+	return
+fi
+
 mkdir -p $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH
-cp -rf $TRAVIS_BUILD_DIR/build/doc/en $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH/en
-cp -rf $TRAVIS_BUILD_DIR/build/doc/cn $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH/cn
+cp -r $TRAVIS_BUILD_DIR/build/doc/en/html $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH/en
+cp -r $TRAVIS_BUILD_DIR/build/doc/cn/html $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH/cn
 
 rsync -r $TRAVIS_BUILD_DIR/build_docs_versioned/ ubuntu@52.76.173.135:/var/content/documentation/
 
