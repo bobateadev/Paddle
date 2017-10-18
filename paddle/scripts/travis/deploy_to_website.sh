@@ -13,6 +13,10 @@ if [ "$TRAVIS_BRANCH" != "build_docs_ci_thuan" ]; then
 	return
 fi
 
+ls $TRAVIS_BUILD_DIR
+ls $TRAVIS_BUILD_DIR/build
+ls $TRAVIS_BUILD_DIR/doc
+
 mkdir -p $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH
 cp -r $TRAVIS_BUILD_DIR/build/doc/en/html $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH/en
 cp -r $TRAVIS_BUILD_DIR/build/doc/cn/html $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH/cn
