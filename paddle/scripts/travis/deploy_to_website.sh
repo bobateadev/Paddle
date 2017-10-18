@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+echo "DEPLOYING TO WEBSITE"
+echo "Branch: $TRAVIS_BRANCH"
+
 # deploy to remote server
 openssl aes-256-cbc -d -a -in $TRAVIS_BUILD_DIR/paddle/scripts/travis/ubuntu.pem.enc -out $TRAVIS_BUILD_DIR/ubuntu.pem -k $DEC_PASSWD
 

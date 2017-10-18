@@ -94,4 +94,6 @@ if [ -n $SSL_KEY ]; then  # Only push updated docs for github.com/PaddlePaddle/P
 
 fi
 
+echo "Executing script: $TRAVIS_BUILD_DIR/paddle/scripts/travis/deploy_to_website.sh"
 $TRAVIS_BUILD_DIR/paddle/scripts/travis/deploy_to_website.sh
+echo "COMPLETE BUILD_DOC"
