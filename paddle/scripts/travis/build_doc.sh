@@ -74,9 +74,11 @@ if [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
   	# Only deploy document changes from develop branch
     echo "Deploying documents from branch $TRAVIS_BRANCH to paddlepaddle.org"
     $TRAVIS_BUILD_DIR/paddle/scripts/travis/deploy_to_website.sh
+  else
+    echo "Skipping document deployment to paddlepaddle.org, wrong branch $TRAVIS_BRANCH != develop"
   fi
 else
-  echo "Skipping document deployment to paddlepaddle.org"
+  echo "Skipping document deployment to paddlepaddle.org on pull request"
 fi
 
 
