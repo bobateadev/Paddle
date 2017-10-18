@@ -12,10 +12,6 @@ chmod 400 $TRAVIS_BUILD_DIR/ubuntu.pem
 
 ssh-add $TRAVIS_BUILD_DIR/ubuntu.pem
 
-if [ "$TRAVIS_BRANCH" != "build_docs_ci_thuan" ]; then
-	return
-fi
-
 echo "------------- $TRAVIS_BUILD_DIR"
 ls $TRAVIS_BUILD_DIR
 echo "------------- $TRAVIS_BUILD_DIR/build"
@@ -27,9 +23,10 @@ mkdir -p $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH
 cp -r $TRAVIS_BUILD_DIR/build/doc/en/html $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH/en
 cp -r $TRAVIS_BUILD_DIR/build/doc/cn/html $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH/cn
 
-
 # pull PaddlePaddle.org app and strip
 # https://github.com/PaddlePaddle/PaddlePaddle.org/archive/master.zip
+cd $TRAVIS_BUILD_DIR
+
 curl -LOk https://github.com/PaddlePaddle/PaddlePaddle.org/archive/master.zip
 unzip master.zip
 cd PaddlePaddle.org-master/
@@ -50,6 +47,10 @@ python manage.py deploy_documentation $TRAVIS_BUILD_DIR/build_docs_versioned/$TR
 
 cd $TRAVIS_BUILD_DIR
 
+echo "------------- rsync -r ..."
+pwd
+ls
+ls PaddlePaddle.org-master/portal/stripped_doc/
 rsync -r PaddlePaddle.org-master/portal/stripped_doc/ ubuntu@52.76.173.135:/var/content/docs
 
 chmod 644 $TRAVIS_BUILD_DIR/ubuntu.pem
