@@ -27,7 +27,30 @@ mkdir -p $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH
 cp -r $TRAVIS_BUILD_DIR/build/doc/en/html $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH/en
 cp -r $TRAVIS_BUILD_DIR/build/doc/cn/html $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH/cn
 
-rsync -r $TRAVIS_BUILD_DIR/build_docs_versioned/ ubuntu@52.76.173.135:/var/content/documentation/
+
+# pull PaddlePaddle.org app and strip
+# https://github.com/PaddlePaddle/PaddlePaddle.org/archive/master.zip
+curl -LOk https://github.com/PaddlePaddle/PaddlePaddle.org/archive/master.zip
+unzip master.zip
+cd PaddlePaddle.org-master/
+cd portal/
+
+sudo pip install -r requirements.txt
+
+if [ -d ./stripped_doc ]
+then
+    rm -rf ./stripped_doc
+fi
+mkdir ./stripped_doc
+
+python manage.py deploy_documentation $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH $TRAVIS_BRANCH ./stripped_doc documentation
+
+# debug purpose, show stripped_doc
+# rsync -r ./stripped_doc ubuntu@52.76.173.135:/tmp
+
+cd $TRAVIS_BUILD_DIR
+
+rsync -r PaddlePaddle.org-master/portal/stripped_doc/ ubuntu@52.76.173.135:/var/content/docs
 
 chmod 644 $TRAVIS_BUILD_DIR/ubuntu.pem
 rm $TRAVIS_BUILD_DIR/ubuntu.pem
