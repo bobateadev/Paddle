@@ -40,17 +40,19 @@ then
 fi
 mkdir ./stripped_doc
 
+echo "-------------TESTING  rsync -r ..."
+pwd
+ls
+
 python manage.py deploy_documentation $TRAVIS_BUILD_DIR/build_docs_versioned/$TRAVIS_BRANCH $TRAVIS_BRANCH ./stripped_doc documentation
+
+ls $TRAVIS_BUILD_DIR/PaddlePaddle.org-master/portal/stripped_doc/
 
 # debug purpose, show stripped_doc
 # rsync -r ./stripped_doc ubuntu@52.76.173.135:/tmp
 
 cd $TRAVIS_BUILD_DIR
 
-echo "------------- rsync -r ..."
-pwd
-ls
-ls PaddlePaddle.org-master/portal/stripped_doc/
 rsync -r PaddlePaddle.org-master/portal/stripped_doc/ ubuntu@52.76.173.135:/var/content/docs
 
 chmod 644 $TRAVIS_BUILD_DIR/ubuntu.pem
