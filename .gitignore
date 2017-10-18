@@ -32,3 +32,4 @@ paddle/pybind/pybind.h
 venv/*
 doc/cn
 doc/en
+build_docs_versioned/

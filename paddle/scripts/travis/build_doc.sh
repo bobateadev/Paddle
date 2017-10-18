@@ -5,10 +5,17 @@ set -e
 mkdir -p $TRAVIS_BUILD_DIR/build
 cd $TRAVIS_BUILD_DIR/build
 
+processors=1
+if [ "$(uname)" == "Darwin" ]; then
+    processors=`sysctl -n hw.ncpu` 
+elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
+    processors=`nproc`
+fi
+
 # Compile Documentation only.
 cmake .. -DCMAKE_BUILD_TYPE=Debug -DWITH_GPU=OFF -DWITH_MKLDNN=OFF -DWITH_MKLML=OFF -DWITH_DOC=ON
-make -j `nproc` gen_proto_py
-make -j `nproc` paddle_docs paddle_docs_cn
+make -j $processors gen_proto_py
+make -j $processors paddle_docs paddle_docs_cn
 
 # check websites for broken links
 linkchecker doc/en/html/index.html
