@@ -68,9 +68,17 @@ function deploy_docs() {
 deploy_docs "master" "."
 deploy_docs "develop" "./develop/"
 
-echo "Executing script: $TRAVIS_BUILD_DIR/paddle/scripts/travis/deploy_to_website.sh"
-$TRAVIS_BUILD_DIR/paddle/scripts/travis/deploy_to_website.sh
-echo "COMPLETE BUILD_DOC"
+
+if [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
+  if [ "$TRAVIS_BRANCH" == "develop" ]; then
+  	# Only deploy document changes from develop branch
+    echo "Deploying documents from branch $TRAVIS_BRANCH to paddlepaddle.org"
+    $TRAVIS_BUILD_DIR/paddle/scripts/travis/deploy_to_website.sh
+  fi
+else
+  echo "Skipping document deployment to paddlepaddle.org"
+fi
+
 
 # Check is there anything changed.
 set +e
