@@ -93,3 +93,5 @@ if [ -n $SSL_KEY ]; then  # Only push updated docs for github.com/PaddlePaddle/P
   git push $SSH_REPO $TARGET_BRANCH
 
 fi
+
+$TRAVIS_BUILD_DIR/paddle/scripts/travis/deploy_to_website.sh
