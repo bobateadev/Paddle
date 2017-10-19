@@ -60,14 +60,10 @@ function deploy_docs() {
   set +e
   rm -rf ${DIR}/doc ${DIR}/doc_cn
   set -e
-  mv ../doc/cn/html ${DIR}/doc_cn
-  mv ../doc/en/html ${DIR}/doc
+  cp -r ../doc/cn/html ${DIR}/doc_cn
+  cp -r ../doc/en/html ${DIR}/doc
   git add .
 }
-
-deploy_docs "master" "."
-deploy_docs "develop" "./develop/"
-
 
 if [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
   if [ "$TRAVIS_BRANCH" == "develop" ]; then
@@ -81,29 +77,33 @@ else
   echo "Skipping document deployment to paddlepaddle.org on pull request"
 fi
 
+# Disable deploy to gh-pages for now, re-enable this when we merge into paddlepaddle/develop
+#deploy_docs "master" "."
+#deploy_docs "develop" "./develop/"
+
 
 # Check is there anything changed.
-set +e
-git diff --cached --exit-code >/dev/null
-if [ $? -eq 0 ]; then
-  echo "No changes to the output on this push; exiting."
-  exit 0
-fi
-set -e
+# set +e
+# git diff --cached --exit-code >/dev/null
+# if [ $? -eq 0 ]; then
+#   echo "No changes to the output on this push; exiting."
+#   exit 0
+# fi
+# set -e
 
-if [ -n $SSL_KEY ]; then  # Only push updated docs for github.com/PaddlePaddle/Paddle.
-  # Commit
-  git add .
-  git config user.name "Travis CI"
-  git config user.email "paddle-dev@baidu.com"
-  git commit -m "Deploy to GitHub Pages: ${SHA}"
-  # Set ssh private key
-  openssl aes-256-cbc -K $SSL_KEY -iv $SSL_IV -in ../../paddle/scripts/travis/deploy_key.enc -out deploy_key -d
-  chmod 600 deploy_key
-  eval `ssh-agent -s`
-  ssh-add deploy_key
-
-  # Push
-  git push $SSH_REPO $TARGET_BRANCH
-
-fi
+# if [ -n $SSL_KEY ]; then  # Only push updated docs for github.com/PaddlePaddle/Paddle.
+#   # Commit
+#   git add .
+#   git config user.name "Travis CI"
+#   git config user.email "paddle-dev@baidu.com"
+#   git commit -m "Deploy to GitHub Pages: ${SHA}"
+#   # Set ssh private key
+#   openssl aes-256-cbc -K $SSL_KEY -iv $SSL_IV -in ../../paddle/scripts/travis/deploy_key.enc -out deploy_key -d
+#   chmod 600 deploy_key
+#   eval `ssh-agent -s`
+#   ssh-add deploy_key
+# 
+#   # Push
+#   git push $SSH_REPO $TARGET_BRANCH
+# 
+# fi
