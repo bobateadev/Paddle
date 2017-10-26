@@ -30,6 +30,7 @@ addons:
       - automake
       - libtool
       - ccache
+  ssh_known_hosts: staging.paddlepaddle.org
 before_install:
   - if [[ "$JOB" == "check_style" ]]; then sudo ln -s /usr/bin/clang-format-3.8 /usr/bin/clang-format; fi
   # Paddle is using protobuf 3.1 currently. Protobuf 3.2 breaks the compatibility. So we specify the python
@@ -42,6 +43,11 @@ script:
   - |
     timeout 2580 paddle/scripts/travis/${JOB}.sh # 43min timeout
     RESULT=$?; if [ $RESULT -eq 0 ] || [ $RESULT -eq 142 ]; then true; else false; fi;
+  - |
+    export DEPLOY_DOCS_SH=https://raw.githubusercontent.com/PaddlePaddle/PaddlePaddle.org/develop/scripts/deploy/deploy_docs.sh
+    export DOCS_DIR=`pwd`
+    cd ..
+    if [[ "$TRAVIS_PULL_REQUEST" == "false" && ("$TRAVIS_BRANCH" == "develop" ]] || [[ "$TRAVIS_BRANCH" =~ ^v[[:digit:]]+\.[[:digit:]]+(\.[[:digit:]]+)?(-\S*)?$) ]]; then curl $DEPLOY_DOCS_SH | bash -s $CONTENT_DEC_PASSWD $TRAVIS_BRANCH $DOCS_DIR $DOCS_DIR/doc; else echo "Not deploying documentation to PPO, wrong branch."; fi;    
 notifications:
   email:
     on_success: change

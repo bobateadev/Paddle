@@ -58,31 +58,34 @@ function deploy_docs() {
   git add .
 }
 
-deploy_docs "master" "."
-deploy_docs "develop" "./develop/"
+# TODO[thuan]: Remove this for now so build will pass in bobateadev fork.  Will remove when we merge into
+# paddlepaddle/Paddle
 
-# Check is there anything changed.
-set +e
-git diff --cached --exit-code >/dev/null
-if [ $? -eq 0 ]; then
-  echo "No changes to the output on this push; exiting."
-  exit 0
-fi
-set -e
-
-if [ -n $SSL_KEY ]; then  # Only push updated docs for github.com/PaddlePaddle/Paddle.
-  # Commit
-  git add .
-  git config user.name "Travis CI"
-  git config user.email "paddle-dev@baidu.com"
-  git commit -m "Deploy to GitHub Pages: ${SHA}"
-  # Set ssh private key
-  openssl aes-256-cbc -K $SSL_KEY -iv $SSL_IV -in ../../paddle/scripts/travis/deploy_key.enc -out deploy_key -d
-  chmod 600 deploy_key
-  eval `ssh-agent -s`
-  ssh-add deploy_key
-
-  # Push
-  git push $SSH_REPO $TARGET_BRANCH
-
-fi
+# deploy_docs "master" "."
+# deploy_docs "develop" "./develop/"
+# 
+# # Check is there anything changed.
+# set +e
+# git diff --cached --exit-code >/dev/null
+# if [ $? -eq 0 ]; then
+#   echo "No changes to the output on this push; exiting."
+#   exit 0
+# fi
+# set -e
+# 
+# if [ -n $SSL_KEY ]; then  # Only push updated docs for github.com/PaddlePaddle/Paddle.
+#   # Commit
+#   git add .
+#   git config user.name "Travis CI"
+#   git config user.email "paddle-dev@baidu.com"
+#   git commit -m "Deploy to GitHub Pages: ${SHA}"
+#   # Set ssh private key
+#   openssl aes-256-cbc -K $SSL_KEY -iv $SSL_IV -in ../../paddle/scripts/travis/deploy_key.enc -out deploy_key -d
+#   chmod 600 deploy_key
+#   eval `ssh-agent -s`
+#   ssh-add deploy_key
+# 
+#   # Push
+#   git push $SSH_REPO $TARGET_BRANCH
+# 
+# fi
