@@ -129,7 +129,8 @@ void BindProgramDesc(py::module &m) {
              }
              return retv;
            })
-      .def("block", &ProgramDescBind::Block, py::return_value_policy::reference)
+      .def("block", &ProgramDescBind::MutableBlock,
+           py::return_value_policy::reference)
       .def("num_blocks", &ProgramDescBind::Size)
       .def("serialize_to_string",
            [](ProgramDescBind &program_desc) -> py::bytes {
@@ -141,6 +142,13 @@ void BindProgramDesc(py::module &m) {
                  desc->SerializeToString(&res),
                  "Serialize ProgramDesc Error. This could be a bug of Paddle.");
              return res;
+           })
+      .def("parse_from_string",
+           [](ProgramDescBind &program_desc, const std::string &data) {
+             ProgramDesc *desc = program_desc.Proto();
+             PADDLE_ENFORCE(desc->ParseFromString(data),
+                            "Fail to parse ProgramDesc from string. This could "
+                            "be a bug of Paddle.");
            });
 }
 

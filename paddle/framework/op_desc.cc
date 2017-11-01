@@ -14,13 +14,68 @@ limitations under the License. */
 
 #include "paddle/framework/op_desc.h"
 #include <functional>
+#include <mutex>
 #include <unordered_map>
+#include "glog/logging.h"
 #include "paddle/framework/block_desc.h"
 #include "paddle/framework/operator.h"
 #include "paddle/framework/program_desc.h"
+#include "paddle/framework/shape_inference.h"
 
 namespace paddle {
 namespace framework {
+
+class OpDescBind;
+class BlockDescBind;
+class CompileTimeInferShapeContext : public InferShapeContext {
+ public:
+  CompileTimeInferShapeContext(const OpDescBind &op,
+                               const BlockDescBind &block);
+
+  bool HasInput(const std::string &name) const override;
+
+  bool HasOutput(const std::string &name) const override;
+
+  bool HasInputs(const std::string &name) const override;
+
+  bool HasOutputs(const std::string &name) const override;
+
+  DDim GetInputDim(const std::string &name) const override;
+
+  void SetOutputDim(const std::string &name, const DDim &dim) override;
+
+  AttrReader Attrs() const override;
+
+  const std::vector<std::string> &Inputs(
+      const std::string &name) const override;
+
+  const std::vector<std::string> &Outputs(
+      const std::string &name) const override;
+
+  void ShareLoD(const std::string &in, const std::string &out, size_t i = 0,
+                size_t j = 0) const override {
+    PADDLE_ENFORCE_LT(i, Inputs(in).size());
+    PADDLE_ENFORCE_LT(j, Outputs(out).size());
+    auto *in_var = block_.FindVarRecursive(Inputs(in)[i]);
+    auto *out_var = block_.FindVarRecursive(Outputs(out)[j]);
+    if (in_var->GetType() != VarDesc::LOD_TENSOR) {
+      VLOG(3) << "input " << in << "is not LodTensor";
+      return;
+    }
+    PADDLE_ENFORCE_EQ(in_var->GetType(), VarDesc::LOD_TENSOR,
+                      "The %d-th output of Output(%s) must be LoDTensor.", j,
+                      out);
+    in_var->SetLoDLevel(out_var->GetLodLevel());
+  }
+
+ private:
+  DDim GetDim(const std::string &name) const override;
+
+  void SetDim(const std::string &name, const DDim &dim) override;
+
+  const OpDescBind &op_;
+  const BlockDescBind &block_;
+};
 
 OpDescBind::OpDescBind(const std::string &type, const VariableNameMap &inputs,
                        const VariableNameMap &outputs,
@@ -59,7 +114,12 @@ OpDescBind::OpDescBind(const OpDesc &desc, ProgramDescBind *prog)
   // restore attrs_
   for (const OpDesc::Attr &attr : desc_.attrs()) {
     std::string attr_name = attr.name();
-    attrs_[attr_name] = GetAttrValue(attr, prog->Proto());
+    if (attr.type() != AttrType::BLOCK) {
+      attrs_[attr_name] = GetAttrValue(attr);
+    } else {
+      auto bid = attr.block_idx();
+      attrs_[attr_name] = prog->MutableBlock(bid);
+    }
   }
 }
 
@@ -133,8 +193,7 @@ void OpDescBind::SetAttr(const std::string &name, const Attribute &v) {
 }
 
 void OpDescBind::SetBlockAttr(const std::string &name, BlockDescBind &block) {
-  BlockDesc *desc = block.Proto();
-  this->attrs_[name] = desc;
+  this->attrs_[name] = &block;
   need_update_ = true;
 }
 
@@ -153,7 +212,7 @@ Attribute OpDescBind::GetAttr(const std::string &name) const {
 int OpDescBind::GetBlockAttr(const std::string &name) const {
   auto it = attrs_.find(name);
   PADDLE_ENFORCE(it != attrs_.end(), "Attribute %s is not found", name);
-  return boost::get<BlockDesc *>(it->second)->idx();
+  return boost::get<BlockDescBind *>(it->second)->ID();
 }
 
 const std::unordered_map<std::string, Attribute> &OpDescBind::GetAttrMap()
@@ -227,26 +286,26 @@ void OpDescBind::Flush() {
   }
 }
 
-using InferShapeFuncMap =
-    std::unordered_map<std::string /*op_type*/,
-                       std::function<void(InferShapeContext *)>>;
+static std::once_flag init_infer_shape_funcs;
 
-static InferShapeFuncMap &InferShapeFuncs() {
-  static InferShapeFuncMap *g_map = nullptr;
-  if (g_map == nullptr) {
-    g_map = new InferShapeFuncMap();
-    auto &info_map = OpInfoMap::Instance();
-    // all registered kernels
-    for (auto &pair : OperatorWithKernel::AllOpKernels()) {
-      auto &info = info_map.Get(pair.first);
-      // use empty type here to avoid runtime checks.
+static void InitInferShapeFuncs() {
+  std::call_once(init_infer_shape_funcs, [] {
+    auto &map = OpInfoMap::Instance();
+    auto &info_map = *map.mutable_map();
+
+    for (auto &kern_pair : OperatorWithKernel::AllOpKernels()) {
+      auto op_type = kern_pair.first;
+      auto &op_info = info_map.at(op_type);
       auto op =
-          static_cast<OperatorWithKernel *>(info.Creator()("", {}, {}, {}));
-      g_map->insert(
-          {pair.first, [op](InferShapeContext *ctx) { op->InferShape(ctx); }});
+          static_cast<OperatorWithKernel *>(op_info.Creator()("", {}, {}, {}));
+      if (op_info.infer_shape_) {  // infer_shape has been registered.
+        continue;
+      }
+      op_info.infer_shape_ = [op](InferShapeContext *ctx) {
+        op->InferShape(ctx);
+      };
     }
-  }
-  return *g_map;
+  });
 }
 
 void OpDescBind::CheckAttrs() {
@@ -262,13 +321,13 @@ void OpDescBind::CheckAttrs() {
 }
 
 void OpDescBind::InferShape(const BlockDescBind &block) const {
-  auto &funcs = InferShapeFuncs();
-  auto it = funcs.find(this->Type());
-  if (it == funcs.end()) {
-    PADDLE_THROW("Operator %s has not been registered", this->Type());
-  }
+  VLOG(3) << "CompileTime infer shape on " << Type();
+  InitInferShapeFuncs();
+  auto &infer_shape = OpInfoMap::Instance().Get(this->Type()).infer_shape_;
+  PADDLE_ENFORCE(static_cast<bool>(infer_shape),
+                 "%s's infer_shape has not been registered", this->Type());
   CompileTimeInferShapeContext ctx(*this, block);
-  it->second(&ctx);
+  infer_shape(&ctx);
 }
 
 void OpDescBind::InferVarType(BlockDescBind *block) const {
@@ -283,6 +342,98 @@ void OpDescBind::InferVarType(BlockDescBind *block) const {
       }
     }
   }
+}
+
+CompileTimeInferShapeContext::CompileTimeInferShapeContext(
+    const OpDescBind &op, const BlockDescBind &block)
+    : op_(op), block_(block) {}
+
+bool CompileTimeInferShapeContext::HasInput(const std::string &name) const {
+  const std::vector<std::string> &input_names = op_.Input(name);
+  auto length = input_names.size();
+  if (length == 0) {
+    return false;
+  }
+  PADDLE_ENFORCE_EQ(length, 1UL,
+                    "Input(%s) should have only one value, "
+                    "but it have %d now",
+                    name, length);
+  return block_.HasVarRecursive(input_names[0]);
+}
+
+bool CompileTimeInferShapeContext::HasOutput(const std::string &name) const {
+  const std::vector<std::string> &output_names = op_.Output(name);
+  auto length = output_names.size();
+  if (length == 0) {
+    return false;
+  }
+  PADDLE_ENFORCE_EQ(length, 1UL,
+                    "Output(%s) should have only one value, "
+                    "but it have %d now",
+                    name, length);
+  return block_.HasVarRecursive(output_names[0]);
+}
+
+bool CompileTimeInferShapeContext::HasInputs(const std::string &name) const {
+  const std::vector<std::string> &input_names = op_.Input(name);
+  if (input_names.empty()) {
+    return false;
+  }
+  for (auto &input : input_names) {
+    if (!block_.HasVarRecursive(input)) return false;
+  }
+  return true;
+}
+
+bool CompileTimeInferShapeContext::HasOutputs(const std::string &name) const {
+  const std::vector<std::string> &output_names = op_.Output(name);
+  if (output_names.empty()) {
+    return false;
+  }
+  for (auto &output : output_names) {
+    if (!block_.HasVarRecursive(output)) return false;
+  }
+  return true;
+}
+
+DDim CompileTimeInferShapeContext::GetInputDim(const std::string &name) const {
+  std::vector<DDim> ddims = GetInputsDim(name);
+  auto length = ddims.size();
+  PADDLE_ENFORCE_EQ(length, 1UL,
+                    "Input(%s) should have 1 value, "
+                    "but it has %d now",
+                    name, length);
+  return ddims[0];
+}
+
+void CompileTimeInferShapeContext::SetOutputDim(const std::string &name,
+                                                const DDim &dim) {
+  SetOutputsDim(name, {dim});
+}
+
+AttrReader CompileTimeInferShapeContext::Attrs() const {
+  return AttrReader(op_.GetAttrMap());
+}
+
+const std::vector<std::string> &CompileTimeInferShapeContext::Inputs(
+    const std::string &name) const {
+  return op_.Input(name);
+}
+
+const std::vector<std::string> &CompileTimeInferShapeContext::Outputs(
+    const std::string &name) const {
+  return op_.Output(name);
+}
+
+DDim CompileTimeInferShapeContext::GetDim(const std::string &name) const {
+  auto var = block_.FindVarRecursive(name);
+  PADDLE_ENFORCE(var != nullptr, "Cannot find variable %s", name);
+  return framework::make_ddim(var->Shape());
+}
+
+void CompileTimeInferShapeContext::SetDim(const std::string &name,
+                                          const DDim &dim) {
+  block_.FindVarRecursive(name)->SetShape(framework::vectorize(dim));
 }
 
 }  // namespace framework
