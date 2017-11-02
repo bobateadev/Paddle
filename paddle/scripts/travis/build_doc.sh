@@ -61,8 +61,8 @@ function deploy_docs() {
 # TODO[thuan]: Remove this for now so build will pass in bobateadev fork.  Will remove when we merge into
 # paddlepaddle/Paddle
 
-# deploy_docs "master" "."
-# deploy_docs "develop" "./develop/"
+deploy_docs "master" "."
+deploy_docs "develop" "./develop/"
 # 
 # # Check is there anything changed.
 # set +e
