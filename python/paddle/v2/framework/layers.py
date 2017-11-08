@@ -1,8 +1,9 @@
-from paddle.v2.framework.layer_helper import LayerHelper, unique_name
 import paddle.v2.framework.core as core
 from paddle.v2.framework.framework import OpProtoHolder, Variable, Program, \
     Operator
-from paddle.v2.framework.initializer import ConstantInitializer
+from paddle.v2.framework.initializer import ConstantInitializer, \
+    NormalInitializer
+from paddle.v2.framework.layer_helper import LayerHelper, unique_name
 import re
 
 __all__ = [
@@ -19,8 +20,8 @@ def fc(input,
        name=None,
        act=None,
        num_flatten_dims=1,
-       program=None,
-       init_program=None):
+       main_program=None,
+       startup_program=None):
     # create helper
     helper = LayerHelper('fc', **locals())
 
@@ -65,8 +66,8 @@ def embedding(input,
               data_type='float32',
               is_sparse=False,
               param_attr=None,
-              program=None,
-              init_program=None):
+              main_program=None,
+              startup_program=None):
     helper = LayerHelper('embedding', **locals())
     w = helper.create_parameter(
         attr=helper.param_attr, shape=size, dtype=data_type)
@@ -85,8 +86,8 @@ def data(name,
          data_type='float32',
          type=core.VarDesc.VarType.LOD_TENSOR,
          append_batch_size=True,
-         program=None,
-         init_program=None):
+         main_program=None,
+         startup_program=None):
     helper = LayerHelper('data', **locals())
     shape = list(shape)
     for i in xrange(len(shape)):
@@ -100,7 +101,7 @@ def data(name,
         shape = [-1] + shape  # append batch size as -1
 
     return helper.create_global_variable(
-        name=name, shape=shape, dtype=data_type, type=type)
+        name=name, shape=shape, dtype=data_type, type=type, stop_gradient=True)
 
 
 def _convert_(name):
@@ -133,9 +134,7 @@ def _create_op_func_(op_type):
     o_name = not_intermediate_outputs[0].name
     intermediate_output_names = [output.name for output in intermediate_outputs]
 
-    def func(**kwargs):
-        helper = LayerHelper(op_type, **kwargs)
-        inputs = dict()
+    def infer_and_check_data_type(op_proto, **kwargs):
         dtype = None
         for ipt in op_proto.inputs:
             name = _convert_(ipt.name)
@@ -152,6 +151,20 @@ def _create_op_func_(op_type):
                 elif dtype != each.data_type:
                     raise ValueError(
                         "operator {0} must input same dtype".format(op_type))
+
+        return dtype
+
+    def func(**kwargs):
+        helper = LayerHelper(op_type, **kwargs)
+
+        dtype = infer_and_check_data_type(op_proto, **kwargs)
+
+        inputs = dict()
+        for ipt in op_proto.inputs:
+            name = _convert_(ipt.name)
+            val = kwargs.pop(name, [])
+            if not isinstance(val, list) and not isinstance(val, tuple):
+                val = [val]
             inputs[ipt.name] = val
 
         outputs = dict()
@@ -177,9 +190,23 @@ _create_op_func_('reshape')
 _create_op_func_('elementwise_add')
 _create_op_func_('sigmoid')
 _create_op_func_('scale')
+_create_op_func_('reshape')
+_create_op_func_('transpose')
 
 
-def cast(x, data_type, program=None):
+def fill_constant(data_type, shape, value=None, program=None):
+    helper = LayerHelper('fill_constant', **locals())
+    out = helper.create_tmp_variable(dtype=data_type)
+    helper.append_op(
+        type='fill_constant',
+        outputs={'Out': [out]},
+        attrs={'data_type': data_type,
+               'shape': shape,
+               'value': value})
+    return out
+
+
+def cast(x, data_type, main_program=None):
     helper = LayerHelper('cast', **locals())
     out = helper.create_tmp_variable(dtype=data_type)
     helper.append_op(
@@ -191,7 +218,7 @@ def cast(x, data_type, program=None):
     return out
 
 
-def concat(input, axis, program=None, init_program=None):
+def concat(input, axis, main_program=None, startup_program=None):
     helper = LayerHelper('concat', **locals())
     out = helper.create_tmp_variable(dtype=helper.input_dtype())
     helper.append_op(
@@ -202,7 +229,7 @@ def concat(input, axis, program=None, init_program=None):
     return out
 
 
-def sums(input, program=None, init_program=None):
+def sums(input, main_program=None, startup_program=None):
     helper = LayerHelper('sum', **locals())
     out = helper.create_tmp_variable(dtype=helper.input_dtype())
     helper.append_op(type='sum', inputs={'X': input}, outputs={'Out': out})
@@ -282,8 +309,8 @@ def sequence_conv(input,
                   padding=None,
                   bias_attr=None,
                   param_attr=None,
-                  program=None,
-                  init_program=None):
+                  main_program=None,
+                  startup_program=None):
     # FIXME(dzh) : want to unify the argument of python layer
     # function. So we ignore some unecessary attributes.
     # such as, padding_trainable, context_start.
@@ -322,8 +349,8 @@ def conv2d(input,
            padding=None,
            bias_attr=None,
            param_attr=None,
-           program=None,
-           init_program=None):
+           main_program=None,
+           startup_program=None):
     helper = LayerHelper('conv2d', **locals())
     dtype = helper.input_dtype()
 
@@ -344,8 +371,13 @@ def conv2d(input,
 
     input_shape = input.shape
     filter_shape = [num_filters, num_filter_channels] + filter_size
+
+    std = (2.0 / (filter_size[0]**2 * num_channels))**0.5
     filter = helper.create_parameter(
-        attr=helper.param_attr, shape=filter_shape, dtype=dtype)
+        attr=helper.param_attr,
+        shape=filter_shape,
+        dtype=dtype,
+        initializer=NormalInitializer(0.0, std, 0))
     pre_bias = helper.create_tmp_variable(dtype)
 
     helper.append_op(
@@ -368,11 +400,13 @@ def sequence_pool(input, pool_type, **kwargs):
     helper = LayerHelper('sequence_pool', input=input, **kwargs)
     dtype = helper.input_dtype()
     pool_out = helper.create_tmp_variable(dtype)
+    max_index = helper.create_tmp_variable(dtype)
 
     helper.append_op(
         type="sequence_pool",
-        inputs={"X": [input]},
-        outputs={"Out": [pool_out]},
+        inputs={"X": input},
+        outputs={"Out": pool_out,
+                 "MaxIndex": max_index},
         attrs={"pooltype": pool_type.upper()})
 
     return pool_out
@@ -384,8 +418,8 @@ def pool2d(input,
            pool_stride=[1, 1],
            pool_padding=[0, 0],
            global_pooling=False,
-           program=None,
-           init_program=None):
+           main_program=None,
+           startup_program=None):
     if pool_type not in ["max", "avg"]:
         raise ValueError(
             "Unknown pool_type: '%s'. It can only be 'max' or 'avg'.",
@@ -406,9 +440,9 @@ def pool2d(input,
         inputs={"X": input},
         outputs={"Out": pool_out},
         attrs={
-            "poolingType": pool_type,
+            "pooling_type": pool_type,
             "ksize": pool_size,
-            "globalPooling": global_pooling,
+            "global_pooling": global_pooling,
             "strides": pool_stride,
             "paddings": pool_padding
         })
@@ -420,12 +454,12 @@ def batch_norm(input,
                act=None,
                is_test=False,
                momentum=0.9,
-               epsilon=1e05,
+               epsilon=1e-05,
                param_attr=None,
                bias_attr=None,
                data_layout='NCHW',
-               program=None,
-               init_program=None):
+               main_program=None,
+               startup_program=None):
     helper = LayerHelper('batch_norm', **locals())
     dtype = helper.input_dtype()
 
@@ -438,27 +472,29 @@ def batch_norm(input,
         else:
             raise ValueError("unsupported data layout:" + data_layout)
 
-    def create_persistable_var(dtype, shape, initializer=None):
-        name = unique_name(".".join([helper.name, "xxxx"]))
-        var = init_program.global_block().create_var(
-            dtype=dtype, shape=shape, name=name, persistable=True)
-        if initializer is not None:
-            initializer(var, var.block)
-        return program.global_block().create_var(
-            name=name, dtype=dtype, shape=shape, persistable=True)
-
     param_shape = [channel_num]
 
     # create parameter
     scale = helper.create_parameter(
-        attr=helper.param_attr, shape=param_shape, dtype=dtype)
+        attr=helper.param_attr,
+        shape=param_shape,
+        dtype=dtype,
+        initializer=ConstantInitializer(1.0))
     bias = helper.create_parameter(
-        attr=helper.param_attr, shape=param_shape, dtype=dtype)
+        attr=helper.param_attr,
+        shape=param_shape,
+        dtype=dtype,
+        initializer=ConstantInitializer(0.0))
 
-    # create input
-    mean = create_persistable_var(dtype, param_shape, ConstantInitializer(0.0))
-    variance = create_persistable_var(dtype, param_shape,
-                                      ConstantInitializer(1.0))
+    mean = helper.create_global_variable(
+        dtype=input.data_type, shape=param_shape, persistable=True)
+    helper.set_variable_initializer(
+        var=mean, initializer=ConstantInitializer(0.0))
+
+    variance = helper.create_global_variable(
+        dtype=input.data_type, shape=param_shape, persistable=True)
+    helper.set_variable_initializer(
+        var=variance, initializer=ConstantInitializer(1.0))
 
     # create output
     # mean and mean_out share the same memory
@@ -499,16 +535,16 @@ class BlockGuard(object):
     keyword.
     """
 
-    def __init__(self, program):
-        if not isinstance(program, Program):
+    def __init__(self, main_program):
+        if not isinstance(main_program, Program):
             raise TypeError("BlockGuard takes a program")
-        self.program = program
+        self.main_program = main_program
 
     def __enter__(self):
-        self.program.create_block()
+        self.main_program.create_block()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.program.rollback()
+        self.main_program.rollback()
         if exc_type is not None:
             return False  # re-raise exception
         return True
@@ -518,7 +554,7 @@ class StaticRNNGuard(BlockGuard):
     def __init__(self, rnn):
         if not isinstance(rnn, StaticRNN):
             raise TypeError("StaticRNNGuard takes an StaticRNN")
-        super(StaticRNNGuard, self).__init__(rnn.helper.program)
+        super(StaticRNNGuard, self).__init__(rnn.helper.main_program)
         self.rnn = rnn
 
     def __enter__(self):
@@ -554,8 +590,9 @@ class StaticRNN(object):
     IN_RNN_BLOCK = 1
     AFTER_RNN_BLOCK = 2
 
-    def __init__(self, name=None, program=None):
-        self.helper = LayerHelper("static_rnn", name=name, program=program)
+    def __init__(self, name=None, main_program=None):
+        self.helper = LayerHelper(
+            "static_rnn", name=name, main_program=main_program)
         self.memories = {}  # memory map, from pre_mem.name --> MemoryLink
         self.inputs = []  # input variable list in current block
         self.outputs = []  # output variable list in parent block
@@ -570,25 +607,45 @@ class StaticRNN(object):
         if self.status != StaticRNN.IN_RNN_BLOCK:
             raise ValueError("You must invoke {0} in rnn block".format(method))
 
-    def memory(self, init=None, shape=None, dtype=None, init_value=0):
+    def memory(self,
+               init=None,
+               shape=None,
+               batch_ref=None,
+               init_value=0.0,
+               init_batch_dim_idx=0,
+               ref_batch_dim_idx=1):
+        '''
+        :param init: boot memory, if not set, a shape, batch_ref must be provided
+        :param shape: shape of the boot memory
+        :param batch_ref: batch size reference variable
+        :param init_value: the init value of boot memory
+        :param init_batch_dim_idx: the index of batch size in init's dimension
+        :param ref_batch_dim_idx: the index of batch size in batch_ref's dimension
+        :return: boot memory
+        '''
         self._assert_in_rnn_block_('memory')
         if init is None:
-            if shape is None or dtype is None:
+            if shape is None or batch_ref is None:
                 raise ValueError(
-                    "if init is None, memory at least need shape and dtype")
+                    "if init is None, memory at least need shape and batch_ref")
             parent_block = self.parent_block()
             var_name = unique_name("@".join([self.helper.name, "memory_boot"]))
             boot_var = parent_block.create_var(
-                name=var_name, shape=shape, dtype=dtype, persistable=False)
+                name=var_name,
+                shape=shape,
+                dtype=batch_ref.data_type,
+                persistable=False)
 
             parent_block.append_op(
-                type="fill_constant",
-                inputs={},
+                type="fill_constant_batch_size_like",
+                inputs={'Input': [batch_ref]},
                 outputs={'Out': [boot_var]},
                 attrs={
                     'value': init_value,
-                    'shape': [40] + list(boot_var.shape[1:]),
-                    'data_type': boot_var.data_type
+                    'shape': boot_var.shape,
+                    'data_type': boot_var.data_type,
+                    'input_dim_idx': ref_batch_dim_idx,
+                    'output_dim_idx': init_batch_dim_idx
                 })
 
             return self.memory(init=boot_var)
@@ -647,7 +704,7 @@ class StaticRNN(object):
         self.memories[mem.name].mem = var
 
     def parent_block(self):
-        prog = self.helper.program
+        prog = self.helper.main_program
         parent_idx = prog.current_block().parent_idx
         assert parent_idx >= 0
         parent_block = prog.block(parent_idx)
@@ -664,8 +721,8 @@ class StaticRNN(object):
             return self.outputs
 
     def complete_rnn_op(self):
-        program = self.helper.program
-        rnn_block = program.current_block()
+        main_program = self.helper.main_program
+        rnn_block = main_program.current_block()
         parent_block = self.parent_block()
 
         local_inputs = set()
@@ -729,3 +786,158 @@ class StaticRNN(object):
                 'states': memories,
                 'step_block': rnn_block
             })
+
+
+def lstm(x,
+         c_pre_init,
+         hidden_dim,
+         forget_bias=None,
+         main_program=None,
+         startup_program=None):
+    helper = LayerHelper('lstm_unit', **locals())
+    rnn = StaticRNN()
+    with rnn.step():
+        c_pre = rnn.memory(init=c_pre_init)
+        x_t = rnn.step_input(x)
+
+        before_fc = concat(
+            input=[x_t, c_pre],
+            axis=1,
+            main_program=main_program,
+            startup_program=startup_program)
+        after_fc = fc(input=before_fc,
+                      size=hidden_dim * 4,
+                      main_program=main_program,
+                      startup_program=startup_program)
+
+        data_type = x.data_type
+        c = helper.create_tmp_variable(data_type)
+        h = helper.create_tmp_variable(data_type)
+
+        helper.append_op(
+            type='lstm_unit',
+            inputs={"X": after_fc,
+                    "C_prev": c_pre},
+            outputs={"C": c,
+                     "H": h},
+            attrs={"forget_bias": forget_bias})
+
+        rnn.update_memory(c_pre, c)
+        rnn.output(h)
+
+    return rnn()
+
+
+def lod_rank_table(x, level=0, main_program=None):
+    helper = LayerHelper("lod_rank_table", **locals())
+    table = helper.create_variable(
+        type=core.VarDesc.VarType.LOD_RANK_TABLE,
+        name=unique_name("lod_rank_table"))
+    helper.append_op(
+        type='lod_rank_table',
+        inputs={'X': x},
+        outputs={'Out': table},
+        attrs={'level': level})
+    return table
+
+
+def lod_tensor_to_array(x, table, main_program=None):
+    helper = LayerHelper("lod_tensor_to_array", **locals())
+    array = helper.create_variable(
+        name=unique_name("lod_tensor_to_array"),
+        type=core.VarDesc.VarType.LOD_TENSOR_ARRAY)
+    helper.append_op(
+        type='lod_tensor_to_array',
+        inputs={'X': x,
+                'RankTable': table},
+        outputs={'Out': array})
+    return array
+
+
+def array_to_lod_tensor(x, table, main_program=None):
+    helper = LayerHelper("array_to_lod_tensor", **locals())
+    tmp = helper.create_tmp_variable(dtype=x.data_type)
+    helper.append_op(
+        type="array_to_lod_tensor",
+        inputs={'X': x,
+                'RankTable': table},
+        outputs={'Out': tmp})
+    return tmp
+
+
+def fill_constant(shape, dtype, value, main_program=None):
+    helper = LayerHelper("ones", **locals())
+    out = helper.create_tmp_variable(dtype=dtype)
+    helper.append_op(
+        type='fill_constant',
+        inputs={},
+        outputs={'Out': [out]},
+        attrs={
+            'shape': shape,
+            'data_type': out.data_type,
+            'value': float(value)
+        })
+    out.stop_gradient = True
+    return out
+
+
+def ones(shape, dtype, main_program=None):
+    return fill_constant(value=1.0, **locals())
+
+
+def zeros(shape, dtype, main_program=None):
+    return fill_constant(value=0.0, **locals())
+
+
+def increment(x, value=1.0, main_program=None):
+    helper = LayerHelper("increment", **locals())
+    out = helper.create_tmp_variable(dtype=x.data_type)
+    helper.append_op(
+        type='increment',
+        inputs={'X': [x]},
+        outputs={'Out': [out]},
+        attrs={'step': value})
+    return out
+
+
+def array_write(x, i, array=None, main_program=None):
+    helper = LayerHelper('array_write', **locals())
+    if array is None:
+        array = helper.create_variable(
+            name="{0}.out".format(helper.name),
+            type=core.VarDesc.VarType.LOD_TENSOR_ARRAY,
+            dtype=x.data_type)
+    helper.append_op(
+        type='write_to_array',
+        inputs={'X': [x],
+                'I': [i]},
+        outputs={'Out': [array]})
+    return array
+
+
+def array_read(array, i, main_program=None):
+    helper = LayerHelper('array_read', **locals())
+    if not isinstance(
+            array,
+            Variable) or array.type != core.VarDesc.VarType.LOD_TENSOR_ARRAY:
+        raise TypeError("array should be tensor array vairable")
+    out = helper.create_tmp_variable(dtype=array.data_type)
+    helper.append_op(
+        type='read_from_array',
+        inputs={'X': [array],
+                'I': [i]},
+        outputs={'Out': [out]})
+    return out
+
+
+def shrink_memory(x, i, table, main_program=None):
+    helper = LayerHelper('shrink_memory', **locals())
+    out = helper.create_tmp_variable(dtype=x.data_type)
+    helper.append_op(
+        type='shrink_rnn_memory',
+        inputs={'X': [x],
+                'I': [i],
+                'RankTable': [table]},
+        outputs={'Out': [out]},
+        attrs={})
+    return out
